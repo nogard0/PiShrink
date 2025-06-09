@@ -101,10 +101,22 @@ function set_autoexpand() {
 cat <<'EOFRC' > "$mountdir/etc/rc.local"
 #!/bin/bash
 ## PiShrink https://github.com/Drewsif/PiShrink ##
-do_expand_rootfs() {
-  ROOT_PART=$(mount | sed -n 's|^/dev/\(.*\) on / .*|\1|p')
 
-  PART_NUM=${ROOT_PART#mmcblk0p}
+ROOT_PART=$(mount | sed -n 's|^\(.*\) on / type.*|\1|p')
+if [ "$ROOT_PART" == "overlayroot" ]; then
+  ROOT_MOUNT=$(mount | sed -n 's|^.* on / type.*lowerdir=\(.*\),upperdir.*|\1|p')
+  ROOT_PART=$(mount | sed -n "s|^\(.*\) on $ROOT_MOUNT type.*|\1|p")
+  MOUNT_ROOT_RW="mount -oremount,rw $ROOT_MOUNT"
+  MOUNT_ROOT_RO="mount -oremount,ro $ROOT_MOUNT"
+else
+  ROOT_MOUNT=""
+  MOUNT_ROOT_RW="true"
+  MOUNT_ROOT_RO="true"
+fi
+
+
+do_expand_rootfs() {
+  PART_NUM=${ROOT_PART#/dev/mmcblk0p}
   if [ "$PART_NUM" = "$ROOT_PART" ]; then
     echo "$ROOT_PART is not an SD card. Don't know how to expand"
     return 0
@@ -128,14 +140,15 @@ p
 w
 EOF
 
-cat <<EOF > /etc/rc.local &&
+$MOUNT_ROOT_RW
+cat <<EOF > ${ROOT_MOUNT}/etc/rc.local &&
 #!/bin/sh
-echo "Expanding /dev/$ROOT_PART"
-resize2fs /dev/$ROOT_PART
-rm -f /etc/rc.local; cp -fp /etc/rc.local.bak /etc/rc.local && /etc/rc.local
+echo "Expanding $ROOT_PART"
+resize2fs $ROOT_PART
+$MOUNT_ROOT_RW; rm -f ${ROOT_MOUNT}/etc/rc.local; cp -fp ${ROOT_MOUNT}/etc/rc.local.bak ${ROOT_MOUNT}/etc/rc.local; $MOUNT_ROOT_RO; reboot
 
 EOF
-reboot
+$MOUNT_ROOT_RO && reboot
 exit
 }
 raspi_config_expand() {
@@ -143,8 +156,7 @@ raspi_config_expand() {
 if [[ $? != 0 ]]; then
   return -1
 else
-  rm -f /etc/rc.local; cp -fp /etc/rc.local.bak /etc/rc.local && /etc/rc.local
-  reboot
+  $MOUNT_ROOT_RW; rm -f ${ROOT_MOUNT}/etc/rc.local; cp -fp ${ROOT_MOUNT}/etc/rc.local.bak ${ROOT_MOUNT}/etc/rc.local; $MOUNT_ROOT_RO; reboot
   exit
 fi
 }
@@ -155,8 +167,7 @@ do_expand_rootfs
 echo "ERROR: Expanding failed..."
 sleep 5
 if [[ -f /etc/rc.local.bak ]]; then
-  cp -fp /etc/rc.local.bak /etc/rc.local
-  /etc/rc.local
+  $MOUNT_ROOT_RW; rm -f ${ROOT_MOUNT}/etc/rc.local; cp -fp ${ROOT_MOUNT}/etc/rc.local.bak ${ROOT_MOUNT}/etc/rc.local; $MOUNT_ROOT_RO; reboot
 fi
 exit 0
 EOFRC
